@@ -1,13 +1,16 @@
 use std::{convert::Infallible, sync::Arc, time::Duration};
-
+use http_body_util::BodyExt;
+use http_body_util::combinators::BoxBody;
 use hyper::{
     body::Buf,
-    client::HttpConnector,
     header::{AUTHORIZATION, CONTENT_TYPE},
-    server::conn::Http,
     service::service_fn,
-    Body, Client as HyperClient, Method, Request, Response, StatusCode,
+    Method, Request, Response, StatusCode,
 };
+use hyper::body::{Bytes, Incoming};
+use hyper_util::client::legacy::Client as HyperClient;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tracing::{info, trace, warn};
 
@@ -18,29 +21,32 @@ use crate::{
     util::{AuthReqHeaderExt, ContentType, Echo, ProtocolItem},
     ActionHandler, EventHandler, OneBot,
 };
-
+use crate::util::once::{Once, OnceError};
 use super::ImplOBC;
 
-fn empty_error_response(code: u16) -> Response<Body> {
+fn empty_error_response(code: u16) -> Response<BoxBody<Bytes, OnceError>> {
     Response::builder()
         .status(code)
-        .body(Body::empty())
+        .body(BoxBody::default())
         .unwrap()
 }
 
-fn error_response(code: u16, body: &'static str) -> Response<Body> {
-    Response::builder().status(code).body(body.into()).unwrap()
+fn error_response(code: u16, body: &'static str) -> Response<BoxBody<Bytes, OnceError>> {
+    Response::builder()
+        .status(code)
+        .body(BoxBody::new(Once::from(body)))
+        .unwrap()
 }
 
-fn encode2resp<T: ProtocolItem>(t: T, content_type: &ContentType) -> Response<Body> {
+fn encode2resp<T: ProtocolItem>(t: T, content_type: &ContentType) -> Response<BoxBody<Once, OnceError>> {
     match content_type {
         ContentType::Json => Response::builder()
             .header(CONTENT_TYPE, "application/json")
-            .body(t.json_encode().into())
+            .body(BoxBody::new(Bytes::from(t.json_encode())))
             .unwrap(),
         ContentType::MsgPack => Response::builder()
             .header(CONTENT_TYPE, "application/msgpack")
-            .body(t.rmp_encode().into())
+            .body(BoxBody::new(Bytes::from(t.rmp_encode())))
             .unwrap(),
     }
 }
@@ -70,14 +76,14 @@ where
             );
             let access_token = http.access_token.clone();
             let path = http.path.clone();
-            let serv = service_fn(move |req: Request<Body>| {
+            let serv = service_fn(move |req: Request<Incoming>| {
                 let path = path.clone();
                 let access_token = access_token.clone();
                 let ob = ob_.clone();
                 async move {
                     use crate::obc::check_query;
                     if req.method() != Method::POST {
-                        return Ok::<Response<Body>, Infallible>(empty_error_response(405));
+                        return Ok::<Response<_>, Infallible>(empty_error_response(405));
                     }
                     if path
                         .map(|p| req.uri().path() != p)
@@ -112,7 +118,7 @@ where
                             return Ok(error_response(403, "Missing Authorization Header"));
                         }
                     }
-                    let data = hyper::body::to_bytes(req).await.unwrap();
+                    let data = req.collect().await.unwrap().to_bytes();
                     let action: Result<Echo<A>, _> = match content_type {
                         ContentType::Json => {
                             ProtocolItem::json_decode(&String::from_utf8(data.to_vec()).unwrap())
@@ -159,8 +165,8 @@ where
                         Ok((tcp_stream, _)) = listener.accept() => {
                             let serv = serv.clone();
                             tokio::spawn(async move {
-                                Http::new()
-                                    .serve_connection(tcp_stream, serv)
+                                hyper::server::conn::http1::Builder::new()
+                                    .serve_connection(TokioIo::new(tcp_stream), serv)
                                     .await
                                     .unwrap(); //Infallible
                             });
@@ -185,7 +191,7 @@ where
         AH: ActionHandler<E, A, R> + Send + Sync + 'static,
         EH: EventHandler<E, A, R> + Send + Sync + 'static,
     {
-        let client = Arc::new(HyperClient::new());
+        let client = Arc::new(HyperClient::builder(TokioExecutor::new()).build_http());
         let ob = ob.clone();
         let mut event_rx = self.event_tx.subscribe();
         let mut signal_rx = ob.get_signal_rx()?;
@@ -213,7 +219,7 @@ async fn webhook_push<E, A, R, AH, EH>(
     event: E,
     r#impl: &str,
     config: &Vec<HttpClient>,
-    client: &Arc<HyperClient<HttpConnector, Body>>,
+    client: &Arc<HyperClient<HttpConnector, Once>>,
 ) where
     E: ProtocolItem,
     A: ProtocolItem,
@@ -252,14 +258,12 @@ async fn webhook_push<E, A, R, AH, EH>(
             match resp.status() {
                 StatusCode::NO_CONTENT => (),
                 StatusCode::OK => {
-                    let body = hyper::body::aggregate(resp).await.unwrap();
-                    let actions: Vec<A> = match serde_json::from_reader(body.reader()) {
-                        Ok(e) => e,
-                        Err(_) => {
-                            panic!()
-                            // handle error here
-                        }
-                    };
+                    let body = resp.collect().await.unwrap().aggregate();
+                    // let body = hyper::body::aggregate(resp).await.unwrap();
+                    let actions: Vec<A> = serde_json::from_reader(body.reader()).unwrap_or_else(|_| {
+                        panic!()
+                        // handle error here
+                    });
                     for a in actions {
                         let _ = ob.handle_action(a).await;
                     }

@@ -1,15 +1,22 @@
 //! 通用内容
 
 use std::fmt::Debug;
-use serde::{Deserialize, Serialize};
 
-mod bytes;
-mod echo;
-pub mod value;
+#[cfg(feature = "http")]
+use hyper::http::{header::AUTHORIZATION, request::Builder};
+use serde::{Deserialize, Serialize};
+#[cfg(all(feature = "websocket", not(feature = "http")))]
+use tokio_tungstenite::tungstenite::http::{header::AUTHORIZATION, request::Builder};
 
 pub use bytes::*;
 pub use echo::*;
 pub use value::*;
+
+use crate::{structs::Selft, WalleResult};
+
+mod bytes;
+mod echo;
+pub mod value;
 
 /// 返回纳秒单位时间戳
 pub fn timestamp_nano() -> u128 {
@@ -37,7 +44,7 @@ pub trait GetSelf: Sized {
 
 #[doc(hidden)]
 pub trait ProtocolItem:
-    Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static
+Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static
 {
     fn json_encode(&self) -> String {
         serde_json::to_string(self).unwrap()
@@ -57,11 +64,18 @@ pub trait ProtocolItem:
     {
         rmp_serde::from_slice(v).map_err(|e| e.to_string())
     }
+    // #[cfg(feature = "http")]
+    // fn to_body(self, content_type: &ContentType) -> BodyStream<Bytes> {
+    //     match content_type {
+    //         ContentType::Json => BodyStream::new(Bytes::from(self.json_encode())),
+    //         ContentType::MsgPack => BodyStream::new(Bytes::from(self.rmp_encode())),
+    //     }
+    // }
     #[cfg(feature = "http")]
-    fn to_body(self, content_type: &ContentType) -> hyper::Body {
+    fn to_body(self, content_type: &ContentType) -> once::Once {
         match content_type {
-            ContentType::Json => hyper::Body::from(self.json_encode()),
-            ContentType::MsgPack => hyper::Body::from(self.rmp_encode()),
+            ContentType::Json => once::Once::from(self.json_encode()),
+            ContentType::MsgPack => once::Once::from(self.rmp_encode()),
         }
     }
     #[cfg(feature = "websocket")]
@@ -75,10 +89,13 @@ pub trait ProtocolItem:
     }
 }
 
-impl<T> ProtocolItem for T where
-    T: Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static
-{
-}
+#[cfg(feature = "http")]
+pub(crate) mod once;
+
+impl<T> ProtocolItem for T
+where
+    T: Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static,
+{}
 
 /// Onebot 协议支持的数据编码格式
 ///
@@ -113,13 +130,6 @@ impl std::fmt::Display for ContentType {
 pub(crate) trait AuthReqHeaderExt {
     fn header_auth_token(self, token: &Option<String>) -> Self;
 }
-
-#[cfg(feature = "http")]
-use hyper::http::{header::AUTHORIZATION, request::Builder};
-#[cfg(all(feature = "websocket", not(feature = "http")))]
-use tokio_tungstenite::tungstenite::http::{header::AUTHORIZATION, request::Builder};
-
-use crate::{structs::Selft, WalleResult};
 
 #[cfg(any(feature = "websocket", feature = "http"))]
 impl AuthReqHeaderExt for Builder {

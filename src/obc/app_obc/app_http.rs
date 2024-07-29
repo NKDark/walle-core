@@ -1,5 +1,5 @@
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
-
+use http_body_util::BodyExt;
 use crate::{
     config::{HttpClient, HttpServer},
     error::{WalleError, WalleResult},
@@ -9,16 +9,16 @@ use crate::{
     ActionHandler, EventHandler, OneBot,
 };
 use hyper::{
-    body::Buf,
-    client::HttpConnector,
     header::{AUTHORIZATION, CONTENT_TYPE},
-    server::conn::Http,
-    service::service_fn,
-    Body, Client as HyperClient, Method, Request, Response,
+    service::service_fn, Method, Request, Response,
 };
+use hyper::body::{Buf, Incoming};
+use hyper_util::client::legacy::Client as HyperClient;
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tracing::{info, warn};
-
+use crate::util::once::Once;
 use super::{AppOBC, EchoMap};
 
 impl<A, R> AppOBC<A, R>
@@ -50,7 +50,7 @@ where
             );
             let listener = TcpListener::bind(&addr).await.map_err(WalleError::from)?;
             let map = self.get_bot_map().clone();
-            let serv = service_fn(move |req: Request<Body>| {
+            let serv = service_fn(move |req: Request<Incoming>| {
                 let path = path.clone();
                 let access_token = access_token.clone();
                 let ob = ob.clone();
@@ -92,10 +92,7 @@ where
                         .map(|s| s.to_owned())
                         .unwrap_or_default();
                     let body = String::from_utf8(
-                        hyper::body::to_bytes(req.into_body())
-                            .await
-                            .unwrap()
-                            .to_vec(),
+                        req.into_body().collect().await.unwrap().to_bytes().to_vec()
                     )
                     .unwrap();
                     match E::json_decode(&body) {
@@ -114,7 +111,7 @@ where
                                 warn!(target: super::OBC, "{}", e);
                             }
                             if let Ok(Some(a)) = tokio::time::timeout(
-                                std::time::Duration::from_secs(8),
+                                Duration::from_secs(8),
                                 action_rx.recv(),
                             )
                             .await
@@ -127,7 +124,7 @@ where
                         }
                         Err(s) => warn!(target: crate::WALLE_CORE, "Webhook json error: {}", s),
                     }
-                    Ok::<Response<Body>, Infallible>(Response::new("".into()))
+                    Ok::<Response<String>, Infallible>(Response::new("".into()))
                 }
             });
             tasks.push(tokio::spawn(async move {
@@ -137,8 +134,8 @@ where
                         _ = signal_rx.recv() => break,
                         Ok((tcp_stream, _)) = listener.accept() => {
                             tokio::spawn(async move {
-                                Http::new()
-                                    .serve_connection(tcp_stream, service)
+                                hyper::server::conn::http1::Builder::new()
+                                    .serve_connection(TokioIo::new(tcp_stream), service)
                                     .await
                                     .unwrap();
                             });
@@ -161,7 +158,7 @@ where
         AH: ActionHandler<E, A, R> + Send + Sync + 'static,
         EH: EventHandler<E, A, R> + Send + Sync + 'static,
     {
-        let client = Arc::new(HyperClient::new());
+        let client = Arc::new(HyperClient::builder(TokioExecutor::new()).build_http());
         for (bot_id, http) in config {
             let (seq, mut rx) = self.get_bot_map().new_connect();
             let implt = http.implt.clone().unwrap_or_default();
@@ -202,7 +199,7 @@ where
 
 async fn http_push<A, R>(
     action: Echo<A>,
-    client: Arc<HyperClient<HttpConnector, Body>>,
+    client: Arc<HyperClient<HttpConnector, Once>>,
     http: HttpClient,
     echo_map: EchoMap<R>,
 ) where
@@ -219,7 +216,7 @@ async fn http_push<A, R>(
         .unwrap();
     match tokio::time::timeout(Duration::from_secs(http.timeout), client.request(req)).await {
         Ok(Ok(resp)) => {
-            let body = hyper::body::aggregate(resp).await.unwrap(); //todo
+            let body = resp.collect().await.unwrap().aggregate();
             let r: R = serde_json::from_reader(body.reader()).unwrap();
             if let Some((_, r_tx)) = echo_map.remove(&echo_s) {
                 r_tx.send(r).ok();

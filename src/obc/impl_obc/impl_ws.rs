@@ -111,7 +111,7 @@ where
                             warn!(target: super::OBC, "Disconnected from {}", wsr.url);
                         }
                         None => {
-                            tokio::time::sleep(std::time::Duration::from_secs(
+                            tokio::time::sleep(Duration::from_secs(
                                 wsr.reconnect_interval as u64,
                             ))
                             .await;
@@ -300,7 +300,7 @@ where
                     }
                 }
                 Err(_) => {
-                    tracing::warn!(
+                    warn!(
                         target: crate::WALLE_CORE,
                         "json deserialize failed: {:?}",
                         text
@@ -333,7 +333,7 @@ where
                     }
                 }
                 Err(_) => {
-                    tracing::warn!(target: crate::WALLE_CORE, "rmp deserialize failed: {:?}", v)
+                    warn!(target: crate::WALLE_CORE, "rmp deserialize failed: {:?}", v)
                 }
             },
         },
