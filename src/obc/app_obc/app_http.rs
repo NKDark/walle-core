@@ -1,5 +1,5 @@
-use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
-use http_body_util::BodyExt;
+use super::{AppOBC, EchoMap};
+use crate::util::once::Once;
 use crate::{
     config::{HttpClient, HttpServer},
     error::{WalleError, WalleResult},
@@ -8,18 +8,19 @@ use crate::{
     util::{AuthReqHeaderExt, Echo, GetSelf, ProtocolItem},
     ActionHandler, EventHandler, OneBot,
 };
+use http_body_util::BodyExt;
+use hyper::body::{Buf, Incoming};
 use hyper::{
     header::{AUTHORIZATION, CONTENT_TYPE},
-    service::service_fn, Method, Request, Response,
+    service::service_fn,
+    Method, Request, Response,
 };
-use hyper::body::{Buf, Incoming};
-use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tracing::{info, warn};
-use crate::util::once::Once;
-use super::{AppOBC, EchoMap};
 
 impl<A, R> AppOBC<A, R>
 where
@@ -92,7 +93,7 @@ where
                         .map(|s| s.to_owned())
                         .unwrap_or_default();
                     let body = String::from_utf8(
-                        req.into_body().collect().await.unwrap().to_bytes().to_vec()
+                        req.into_body().collect().await.unwrap().to_bytes().to_vec(),
                     )
                     .unwrap();
                     match E::json_decode(&body) {
@@ -110,11 +111,8 @@ where
                             if let Err(e) = ob.handle_event(event).await {
                                 warn!(target: super::OBC, "{}", e);
                             }
-                            if let Ok(Some(a)) = tokio::time::timeout(
-                                Duration::from_secs(8),
-                                action_rx.recv(),
-                            )
-                            .await
+                            if let Ok(Some(a)) =
+                                tokio::time::timeout(Duration::from_secs(8), action_rx.recv()).await
                             {
                                 let echo_s = a.get_echo();
                                 echo_map.remove(&echo_s);

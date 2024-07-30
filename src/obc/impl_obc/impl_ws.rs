@@ -111,10 +111,8 @@ where
                             warn!(target: super::OBC, "Disconnected from {}", wsr.url);
                         }
                         None => {
-                            tokio::time::sleep(Duration::from_secs(
-                                wsr.reconnect_interval as u64,
-                            ))
-                            .await;
+                            tokio::time::sleep(Duration::from_secs(wsr.reconnect_interval as u64))
+                                .await;
                         }
                     }
                 }

@@ -1,19 +1,20 @@
-use std::{convert::Infallible, sync::Arc, time::Duration};
 use http_body_util::BodyExt;
-use http_body_util::combinators::BoxBody;
+use hyper::body::Incoming;
 use hyper::{
     body::Buf,
     header::{AUTHORIZATION, CONTENT_TYPE},
     service::service_fn,
     Method, Request, Response, StatusCode,
 };
-use hyper::body::{Bytes, Incoming};
-use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tracing::{info, trace, warn};
 
+use super::ImplOBC;
+use crate::util::once::Once;
 use crate::{
     config::{HttpClient, HttpServer},
     error::{WalleError, WalleResult},
@@ -21,32 +22,30 @@ use crate::{
     util::{AuthReqHeaderExt, ContentType, Echo, ProtocolItem},
     ActionHandler, EventHandler, OneBot,
 };
-use crate::util::once::{Once, OnceError};
-use super::ImplOBC;
 
-fn empty_error_response(code: u16) -> Response<BoxBody<Bytes, OnceError>> {
+fn empty_error_response(code: u16) -> Response<Once> {
     Response::builder()
         .status(code)
-        .body(BoxBody::default())
+        .body(Once::default())
         .unwrap()
 }
 
-fn error_response(code: u16, body: &'static str) -> Response<BoxBody<Bytes, OnceError>> {
+fn error_response(code: u16, body: &'static str) -> Response<Once> {
     Response::builder()
         .status(code)
-        .body(BoxBody::new(Once::from(body)))
+        .body(Once::from(body))
         .unwrap()
 }
 
-fn encode2resp<T: ProtocolItem>(t: T, content_type: &ContentType) -> Response<BoxBody<Once, OnceError>> {
+fn encode2resp<T: ProtocolItem>(t: T, content_type: &ContentType) -> Response<Once> {
     match content_type {
         ContentType::Json => Response::builder()
             .header(CONTENT_TYPE, "application/json")
-            .body(BoxBody::new(Bytes::from(t.json_encode())))
+            .body(Once::from(t.json_encode()))
             .unwrap(),
         ContentType::MsgPack => Response::builder()
             .header(CONTENT_TYPE, "application/msgpack")
-            .body(BoxBody::new(Bytes::from(t.rmp_encode())))
+            .body(Once::from(t.rmp_encode()))
             .unwrap(),
     }
 }
@@ -227,7 +226,7 @@ async fn webhook_push<E, A, R, AH, EH>(
     AH: ActionHandler<E, A, R> + Send + Sync + 'static,
     EH: EventHandler<E, A, R> + Send + Sync + 'static,
 {
-    let date = event.json_encode();
+    let data = event.json_encode();
     for webhook in config {
         let req = Request::builder()
             .method(Method::POST)
@@ -236,7 +235,7 @@ async fn webhook_push<E, A, R, AH, EH>(
             .header("X-OneBot-Version", 12.to_string())
             .header("X-Impl", r#impl.to_owned())
             .header_auth_token(&webhook.access_token)
-            .body(date.clone().into())
+            .body(data.clone().into())
             .unwrap();
         let ob = ob.clone();
         let client = client.clone();
@@ -260,10 +259,11 @@ async fn webhook_push<E, A, R, AH, EH>(
                 StatusCode::OK => {
                     let body = resp.collect().await.unwrap().aggregate();
                     // let body = hyper::body::aggregate(resp).await.unwrap();
-                    let actions: Vec<A> = serde_json::from_reader(body.reader()).unwrap_or_else(|_| {
-                        panic!()
-                        // handle error here
-                    });
+                    let actions: Vec<A> =
+                        serde_json::from_reader(body.reader()).unwrap_or_else(|_| {
+                            panic!()
+                            // handle error here
+                        });
                     for a in actions {
                         let _ = ob.handle_action(a).await;
                     }

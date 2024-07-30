@@ -145,7 +145,7 @@ impl Resp {
 pub mod resp_error {
     use super::RespError;
     /// RespError 构造函数声明
-    /// 
+    ///
     /// ## Example:
     /// ```rust
     /// use  walle_core::resp::RespError;

@@ -1,7 +1,7 @@
 //! payload value 的各类型与方法，与 json 基本一致
 
 use std::collections::HashMap;
-
+use base64::Engine;
 use super::{OneBotBytes, TryAsMut, TryAsRef};
 use crate::error::{WalleError, WalleResult};
 
@@ -258,7 +258,7 @@ impl TryFrom<Value> for OneBotBytes {
         match value {
             Value::Bytes(v) => Ok(v),
             Value::Str(s) => Ok(OneBotBytes(
-                base64::decode(&s).map_err(|_| WalleError::IllegalBase64(s))?,
+                base64::prelude::BASE64_STANDARD.decode(&s).map_err(|_| WalleError::IllegalBase64(s))?,
             )),
             v => Err(WalleError::ValueTypeNotMatch(
                 "bytes".to_string(),

@@ -44,7 +44,7 @@ pub trait GetSelf: Sized {
 
 #[doc(hidden)]
 pub trait ProtocolItem:
-Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static
+    Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static
 {
     fn json_encode(&self) -> String {
         serde_json::to_string(self).unwrap()
@@ -92,10 +92,10 @@ Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static
 #[cfg(feature = "http")]
 pub(crate) mod once;
 
-impl<T> ProtocolItem for T
-where
-    T: Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static,
-{}
+impl<T> ProtocolItem for T where
+    T: Serialize + for<'de> Deserialize<'de> + Debug + Send + Sync + 'static
+{
+}
 
 /// Onebot 协议支持的数据编码格式
 ///

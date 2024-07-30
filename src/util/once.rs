@@ -1,8 +1,9 @@
+use hyper::body::{Buf, Bytes, Frame};
 use std::fmt::Formatter;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use hyper::body::{Buf, Bytes, Frame};
 
+#[derive(Default)]
 pub struct Once(Bytes);
 
 unsafe impl Send for Once {}
@@ -67,7 +68,10 @@ impl hyper::body::Body for Once {
     type Data = Bytes;
     type Error = OnceError;
 
-    fn poll_frame(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         Poll::Ready(Some(Ok(Frame::data(self.0.clone()))))
     }
 }

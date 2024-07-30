@@ -1,9 +1,10 @@
+use base64::Engine;
 use serde::{de::Visitor, Deserialize, Serialize};
 
 /// 用于序列化和反序列化 OneBot 消息的 bytes 类型
-/// 
+///
 /// json 序列化时，使用 base64 编码
-/// 
+///
 /// msgpack 序列化时，使用原始 bytes
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OneBotBytes(pub Vec<u8>);
@@ -14,7 +15,7 @@ impl Serialize for OneBotBytes {
         S: serde::Serializer,
     {
         if std::any::type_name::<S>().starts_with("&mut serde_json") {
-            return serializer.serialize_str(&base64::encode(&self.0));
+            return serializer.serialize_str(&base64::prelude::BASE64_STANDARD.encode(&self.0));
         }
         serializer.serialize_bytes(&self.0)
     }
@@ -44,7 +45,7 @@ impl<'de> Visitor<'de> for OBBVistor {
     where
         E: serde::de::Error,
     {
-        Ok(OneBotBytes(base64::decode(v).map_err(|_| {
+        Ok(OneBotBytes(base64::prelude::BASE64_STANDARD.decode(v).map_err(|_| {
             serde::de::Error::custom("Not a valid base64 String")
         })?))
     }

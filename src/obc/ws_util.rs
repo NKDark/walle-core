@@ -2,7 +2,7 @@ use super::OBC;
 use colored::*;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::handshake::client::{generate_key, Request};
-use tokio_tungstenite::tungstenite::handshake::server::{Response};
+use tokio_tungstenite::tungstenite::handshake::server::Response;
 use tokio_tungstenite::tungstenite::http::{
     request::Builder as HttpReqBuilder, response::Builder as HttpRespBuilder, Response as HttpResp,
     Uri,
